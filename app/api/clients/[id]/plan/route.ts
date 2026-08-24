@@ -4,7 +4,7 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { requireCoach } from '@/lib/auth'
 import { loadClient } from '@/lib/db'
 import { PLAN_EXTRACTION_PROMPT, parseExtractedPlan, PlanExtractionError, type ExtractedPlan } from '@/lib/plan-extract'
-import { resolveDates } from '@/lib/plan'
+import { resolveDates, sessionDate } from '@/lib/plan'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 180
@@ -168,4 +168,67 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
   }
 
   return NextResponse.json({ planId: planRow.id, sessions: dated.length })
+}
+
+/**
+ * Change the active plan's start date and re-date every session off it.
+ *
+ * The date in a plan PDF is rarely the date the client actually began, and
+ * every session date is derived from it — so this is the correction the coach
+ * needs most, and it must not require re-uploading the plan.
+ */
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+  const { supabase, coachId, unauthorized } = await requireCoach()
+  if (unauthorized) return unauthorized
+
+  const client = await loadClient(supabase, coachId!, id)
+  if (!client) return NextResponse.json({ error: 'Client not found' }, { status: 404 })
+
+  const body = await req.json().catch(() => null)
+  const startDate = body?.startDate
+  if (typeof startDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+    return NextResponse.json({ error: 'startDate must be YYYY-MM-DD' }, { status: 400 })
+  }
+
+  const { data: planRow } = await supabase
+    .from('training_plans')
+    .select('id')
+    .eq('client_id', id)
+    .eq('coach_id', coachId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!planRow) return NextResponse.json({ error: 'This client has no active plan.' }, { status: 404 })
+
+  const { error: planError } = await supabase
+    .from('training_plans')
+    .update({ start_date: startDate })
+    .eq('id', planRow.id)
+    .eq('coach_id', coachId)
+
+  if (planError) {
+    console.error('[plan] start date update failed:', planError)
+    return NextResponse.json({ error: 'Failed to update the start date' }, { status: 500 })
+  }
+
+  const { data: sessionRows } = await supabase
+    .from('plan_sessions')
+    .select('id, week, day_of_week')
+    .eq('plan_id', planRow.id)
+
+  let redated = 0
+  for (const s of sessionRows ?? []) {
+    const date = sessionDate(startDate, s.week as number, s.day_of_week as number)
+    const { error } = await supabase
+      .from('plan_sessions')
+      .update({ session_date: date })
+      .eq('id', s.id)
+      .eq('coach_id', coachId)
+    if (!error) redated++
+  }
+
+  return NextResponse.json({ startDate, sessionsRedated: redated })
 }

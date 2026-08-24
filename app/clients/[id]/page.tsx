@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { use } from 'react'
-import { Button, Card, COLORS, ErrorNote, PILL, SectionTitle, VERDICT_TONE, formatDuration } from '@/components/ui'
+import { Button, Card, COLORS, ErrorNote, INPUT, PILL, SectionTitle, VERDICT_TONE, formatDuration } from '@/components/ui'
 import { PlanUpload } from '@/components/plan-upload'
 import { RideUpload } from '@/components/ride-upload'
 import { ProgressionView } from '@/components/progression-view'
+import { ClientChat } from '@/components/client-chat'
 import type { Client, PlanSession } from '@/lib/types'
 import type { Progression } from '@/lib/progression'
 import type { PlanComparison } from '@/lib/plan-match'
@@ -33,7 +34,7 @@ interface ClientView {
   pendingChanges: Array<{ id: string; summary: string }>
 }
 
-type Tab = 'overview' | 'plan' | 'rides'
+type Tab = 'overview' | 'plan' | 'rides' | 'chat'
 
 const DAY_LABELS = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -49,6 +50,32 @@ export default function ClientPage({ params }: { params: Promise<{ id: string }>
   const [tab, setTab] = useState<Tab>('overview')
   const [replacingPlan, setReplacingPlan] = useState(false)
   const [openRide, setOpenRide] = useState<string | null>(null)
+  const [editingStart, setEditingStart] = useState(false)
+  const [newStart, setNewStart] = useState('')
+  const [savingStart, setSavingStart] = useState(false)
+  const [startNote, setStartNote] = useState('')
+
+  const saveStartDate = async () => {
+    if (!newStart) return
+    setSavingStart(true)
+    setStartNote('')
+    try {
+      const res = await fetch(`/api/clients/${id}/plan`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startDate: newStart }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? 'Failed to change the start date')
+      setStartNote(`Re-dated ${json.sessionsRedated} sessions. Rides already uploaded keep the comparison they were given — re-upload one to re-match it.`)
+      setEditingStart(false)
+      await load()
+    } catch (e) {
+      setStartNote(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSavingStart(false)
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -119,19 +146,19 @@ export default function ClientPage({ params }: { params: Promise<{ id: string }>
         </header>
 
         <div className="flex gap-2 mb-5">
-          {(['overview', 'plan', 'rides'] as Tab[]).map(t => (
+          {(['overview', 'plan', 'rides', 'chat'] as Tab[]).map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className="text-xs px-3 py-1.5 rounded-full font-medium transition-colors hover:opacity-80"
               style={tab === t ? { backgroundColor: COLORS.accent, color: '#f8fafc' } : PILL}
             >
-              {t === 'overview' ? 'Progress' : t === 'plan' ? 'Plan' : 'Upload ride'}
+              {t === 'overview' ? 'Progress' : t === 'plan' ? 'Plan' : t === 'rides' ? 'Upload ride' : 'Chat'}
             </button>
           ))}
         </div>
 
-        {tab === 'overview' && (
+        <div style={{ display: tab === 'overview' ? 'block' : 'none' }}>
           <div className="space-y-5">
             <ProgressionView progression={progression} />
 
@@ -215,9 +242,9 @@ export default function ClientPage({ params }: { params: Promise<{ id: string }>
               )}
             </div>
           </div>
-        )}
+        </div>
 
-        {tab === 'plan' && (
+        <div style={{ display: tab === 'plan' ? 'block' : 'none' }}>
           <div className="space-y-5">
             {plan && !replacingPlan ? (
               <>
@@ -227,7 +254,49 @@ export default function ClientPage({ params }: { params: Promise<{ id: string }>
                   </SectionTitle>
                   <Card>
                     <div className="text-[11px]" style={{ color: COLORS.muted }}>
-                      From {plan.filename} · starts {plan.startDate ?? 'unset'} · {plan.weeks ?? '?'} weeks · {sessions.length} sessions
+                      From {plan.filename} · {plan.weeks ?? '?'} weeks · {sessions.length} sessions
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                      {editingStart ? (
+                        <>
+                          <div>
+                            <label className="block text-[11px] font-medium mb-1" style={{ color: COLORS.body }}>
+                              Date {client.name} actually started
+                            </label>
+                            <input
+                              type="date"
+                              value={newStart}
+                              onChange={e => setNewStart(e.target.value)}
+                              className="px-3 py-2 rounded-lg text-sm outline-none"
+                              style={INPUT}
+                            />
+                          </div>
+                          <Button onClick={saveStartDate} disabled={savingStart || !newStart}>
+                            {savingStart ? 'Re-dating…' : 'Re-date plan'}
+                          </Button>
+                          <button onClick={() => setEditingStart(false)} className="text-xs" style={{ color: COLORS.muted }}>
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <div className="text-sm">
+                            Starts <span style={{ color: COLORS.text }}>{plan.startDate ?? 'unset'}</span>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            onClick={() => { setNewStart(plan.startDate ?? ''); setEditingStart(true) }}
+                          >
+                            Change start date
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                    {startNote && (
+                      <div className="text-[11px] mt-2" style={{ color: COLORS.body }}>{startNote}</div>
+                    )}
+                    <div className="text-[11px] mt-2" style={{ color: COLORS.muted }}>
+                      Every session date is derived from this — changing it re-dates the whole plan.
                     </div>
                   </Card>
                 </div>
@@ -271,11 +340,15 @@ export default function ClientPage({ params }: { params: Promise<{ id: string }>
               </div>
             )}
           </div>
-        )}
+        </div>
 
-        {tab === 'rides' && (
+        <div style={{ display: tab === 'rides' ? 'block' : 'none' }}>
           <RideUpload clientId={id} hasPlan={plan != null} onUploaded={load} />
-        )}
+        </div>
+
+        <div style={{ display: tab === 'chat' ? 'block' : 'none' }}>
+          <ClientChat clientId={id} clientName={client.name} onChanged={load} />
+        </div>
       </div>
     </div>
   )

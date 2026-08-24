@@ -30,6 +30,9 @@ npm run build          # Full Next.js build
   comparison against the session it was meant to be, and the coaching feedback.
 - **`plan_changes`** — proposed edits to upcoming sessions. The coach applies or
   dismisses; applying writes straight onto the `plan_sessions` row.
+- **`client_messages`** — the coaching chat thread, one per client. The chat's
+  tools write to the plan and the client, so a correction in conversation is an
+  actual fix, not a note.
 
 ## Key decisions
 
@@ -42,6 +45,11 @@ npm run build          # Full Next.js build
 - **Proposed changes are filtered to real upcoming sessions** before they are
   saved, and their fields are coerced to the plan's columns — a hallucinated
   session ID or field never reaches the database.
+- **The plan start date is editable, and re-dates the plan.** The date printed
+  on a plan PDF is rarely the date the client began. `PATCH
+  /api/clients/[id]/plan` and the chat's `set_plan_start_date` both recompute
+  every `plan_sessions.session_date` from the new start. Rides already uploaded
+  keep the comparison they were given — re-upload to re-match.
 - **Analysis degrades rather than refusing.** No FTP means no zones, TSS or
   %FTP, but decoupling, fade and duration still compute. No plan means the ride
   is analyzed as unplanned.
