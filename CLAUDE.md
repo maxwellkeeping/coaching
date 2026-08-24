@@ -50,10 +50,19 @@ npm run build          # Full Next.js build
   /api/clients/[id]/plan` and the chat's `set_plan_start_date` both recompute
   every `plan_sessions.session_date` from the new start. Rides already uploaded
   keep the comparison they were given — re-upload to re-match.
+- **Shape is read without reference to FTP.** `lib/segments.ts` splits a ride
+  into steady segments by change-point detection and finds the repeating
+  patterns in them — "3 × (2min @ 262W, 2min @ 224W)". No FTP is involved,
+  because the FTP on a client record is often stale and a workout's shape does
+  not stop existing when that number is wrong. The work/rest boundary is found
+  in the widest gap between the ride's own power levels, not at a fixed
+  fraction: a warmup at ~62% of working power sits either side of any fixed
+  line, and merging it into the first interval drags the whole reading down a
+  band.
 - **Rides are matched and judged on their shape, not the calendar.**
-  `lib/workout-structure.ts` reads what the ride actually was — over-unders,
-  VO2max, threshold, sweet spot, steady — from the power stream, inferring the
-  intervals when the rider never pressed lap. A session recognised by structure
+  `lib/workout-structure.ts` names what the ride was — over-unders, VO2max,
+  threshold, sweet spot, steady — from those segments, inferring the intervals
+  when the rider never pressed lap. A session recognised by structure
   within a few days of its prescribed date counts as that session, moved. This
   is what stops the app reporting an over-under done a day late as the wrong
   workout.

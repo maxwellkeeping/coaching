@@ -69,7 +69,11 @@ describe('compareToPlan', () => {
   })
 
   it('flags a ride cut well short of the prescription', () => {
-    const result = compareToPlan(ride(1800, 180, 140), session({ durationSecs: 5400, targetLoad: null, intensity: 'endurance' }), 250)
+    const result = compareToPlan(
+      ride(1800, 180, 140),
+      session({ title: 'Long endurance', description: '90min Z2', durationSecs: 5400, targetLoad: null, intensity: 'endurance' }),
+      250
+    )
     expect(result.verdict).toBe('cut-short')
     expect(result.durationDeltaPct).toBeCloseTo(-66.7, 0)
   })
@@ -87,14 +91,22 @@ describe('compareToPlan', () => {
   })
 
   it('judges against the load target when the plan gives one', () => {
-    const heavy = compareToPlan(ride(5400, 250, 160), session({ durationSecs: 5400, targetLoad: 100, intensity: 'tempo' }), 250)
+    const heavy = compareToPlan(
+      ride(5400, 250, 160),
+      session({ title: 'Tempo ride', description: '90min steady tempo', durationSecs: 5400, targetLoad: 100, intensity: 'tempo' }),
+      250
+    )
     expect(heavy.loadDeltaPct).not.toBeNull()
     expect(heavy.verdict).toBe('harder-than-prescribed')
     expect(heavy.notes.some(n => n.includes('TSS'))).toBe(true)
   })
 
   it('reports duration and load deltas without an FTP to judge intensity by', () => {
-    const result = compareToPlan(ride(3600, 200, 145, null), session({ durationSecs: 3600, targetLoad: null }), null)
+    const result = compareToPlan(
+      ride(3600, 200, 145, null),
+      session({ title: 'Endurance hour', description: '1h steady', durationSecs: 3600, targetLoad: null, intensity: 'endurance' }),
+      null
+    )
     expect(result.durationDeltaPct).toBe(0)
     expect(result.loadDeltaPct).toBeNull()
     expect(result.verdict).toBe('as-prescribed')
@@ -108,6 +120,28 @@ describe('compareToPlan', () => {
       durationSecs: 3600,
       intensity: 'threshold',
     })
+  })
+})
+
+describe('compareToPlan and structure', () => {
+  it('calls a steady hour a different session when intervals were prescribed', () => {
+    const result = compareToPlan(
+      ride(3600, 200, 145),
+      session({ title: 'Threshold 3x12', description: '3x12min @ 95% FTP', durationSecs: 3600, targetLoad: null }),
+      250
+    )
+    expect(result.verdict).toBe('different-session')
+    expect(result.structure?.verdict).toBe('different-structure')
+  })
+
+  it('recognises the prescribed session with no FTP on file', () => {
+    // Shape is FTP-free, so the session is still identified — only the band is not.
+    const result = compareToPlan(
+      intervalRide(238, 250),
+      session({ title: 'Threshold 3x12', description: '3x12min threshold', durationSecs: 3000, targetLoad: null }),
+      null
+    )
+    expect(result.structure?.verdict).not.toBe('different-structure')
   })
 })
 

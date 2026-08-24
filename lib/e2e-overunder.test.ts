@@ -61,3 +61,61 @@ describe('an over-under session, end to end', () => {
     expect(result.notes.some(n => n.includes('% FTP against roughly'))).toBe(false)
   })
 })
+
+describe('the cases that broke it in the field', () => {
+  /** An over-under ridden raggedly, with drift across blocks and noisy power. */
+  function raggedOverUnder() {
+    const samples = [...steady(720, 135, 118)]
+    let seed = 42
+    const noisy = (secs: number, w: number, hr: number) => {
+      const out = []
+      for (let i = 0; i < secs; i++) {
+        seed = (seed * 1103515245 + 12345) % 2147483648
+        const jitter = ((seed / 2147483648) - 0.5) * 0.12 * w
+        out.push({ power: Math.round(w + jitter), heartRate: hr })
+      }
+      return out
+    }
+    // Three blocks, each fading a little, as a tiring rider actually rides them.
+    for (const [over, under] of [[262, 224], [256, 220], [248, 216]]) {
+      for (let rep = 0; rep < 3; rep++) {
+        samples.push(...noisy(120, over, 168), ...noisy(120, under, 161))
+      }
+      samples.push(...steady(300, 115, 128))
+    }
+    samples.push(...steady(480, 125, 120))
+    return parseFitFile(buildFitFile({ samples, session: null }))
+  }
+
+  it('recognises a ragged, fading over-under', () => {
+    const ride = summarizeFitRide(raggedOverUnder(), { ftp: FTP, hrMax: 185 })
+    expect(ride.structure.archetype).toBe('over-under')
+    expect(ride.structure.blocks.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('recognises it with an FTP 20% out of date', () => {
+    // The client record says 200W when they are riding 250W efforts. Shape is
+    // read from the ride, so the session is still identified.
+    const stale = summarizeFitRide(raggedOverUnder(), { ftp: 200, hrMax: 185 })
+    expect(stale.structure.archetype).toBe('over-under')
+    expect(stale.structure.blocks.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('recognises it with no FTP on file at all', () => {
+    const none = summarizeFitRide(raggedOverUnder(), { ftp: null, hrMax: 185 })
+    expect(none.structure.archetype).toBe('over-under')
+    expect(none.structure.classifiable).toBe(true)
+  })
+
+  it('still matches it to the prescribed session with a stale FTP', () => {
+    const stale = summarizeFitRide(raggedOverUnder(), { ftp: 200, hrMax: 185 })
+    const result = compareToPlan(stale, prescribed, 200)
+    expect(result.structure?.verdict).not.toBe('different-structure')
+    expect(result.verdict).not.toBe('different-session')
+  })
+
+  it('describes the segments in terms a coach would recognise', () => {
+    const ride = summarizeFitRide(raggedOverUnder(), { ftp: FTP, hrMax: 185 })
+    expect(ride.structure.segmentSummary).toMatch(/\d+ × \(/)
+  })
+})

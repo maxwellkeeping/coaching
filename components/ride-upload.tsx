@@ -274,6 +274,19 @@ export function RideUpload({ clientId, hasPlan, onUploaded }: {
             <Stat label="Coasting" value={`${analysis.power.coastingPct}%`} />
           </div>
 
+          <Card>
+            <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: COLORS.muted }}>
+              What the app saw
+            </div>
+            <pre className="text-[11px] leading-relaxed overflow-x-auto" style={{ color: COLORS.body, fontFamily: 'ui-monospace, monospace', margin: 0 }}>
+              {result.ride.structure.segmentSummary}
+            </pre>
+            <div className="text-[11px] mt-2" style={{ color: COLORS.muted }}>
+              Read straight from the power trace, without reference to FTP. If this does not match the ride, the
+              analysis above it is wrong — say so in the chat and I can tell you why.
+            </div>
+          </Card>
+
           {analysis.zones && <Card><ZoneBar zones={analysis.zones} /></Card>}
           {analysis.intervals && analysis.intervals.length > 0 && (
             <Card><IntervalTable intervals={analysis.intervals} /></Card>

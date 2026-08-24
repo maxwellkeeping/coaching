@@ -52,8 +52,11 @@ describe('detectIntervalsFromStream', () => {
     expect(detectIntervalsFromStream(stream([[3600, 165]]), FTP)).toEqual([])
   })
 
-  it('needs an FTP to know what counts as an effort', () => {
-    expect(detectIntervalsFromStream(stream([[600, 150], [600, 260]]), null)).toEqual([])
+  it('finds efforts with no FTP at all — shape is read from the ride itself', () => {
+    // The whole point: a stale or missing FTP must not hide a workout.
+    const s = stream([[600, 150], [720, 260], [300, 130], [720, 260], [300, 120]])
+    expect(detectIntervalsFromStream(s, null)).toHaveLength(2)
+    expect(detectIntervalsFromStream(s, null)).toEqual(detectIntervalsFromStream(s, 250))
   })
 
   it('ignores efforts too brief to be intervals', () => {

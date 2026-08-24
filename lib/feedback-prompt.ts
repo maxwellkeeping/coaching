@@ -44,6 +44,11 @@ function rideBlock(ride: FitRideSummary): string {
     : 'No work intervals detected — this reads as a continuous ride.'
 
   return `- What this ride actually was: ${ride.structure.description}${ride.structure.inferredFromStream ? ' (read from the power stream — the rider did not press lap)' : ''}
+
+### The ride segment by segment, as it would look on a graph
+${ride.structure.segmentSummary}
+
+- Duration and power above are measured; the naming of the session is a reading of that shape. If the segments plainly show a session the naming got wrong, trust the segments and say so.
 - Duration ${mins(a.durationSecs)}${ride.reported.totalDistanceKm != null ? `, ${ride.reported.totalDistanceKm}km` : ''}${ride.reported.totalAscentM != null ? `, ${ride.reported.totalAscentM}m climbing` : ''}
 - Power: avg ${a.power.avgWatts ?? 'n/a'}W, NP ${a.power.normalizedPower ?? 'n/a'}W, VI ${a.power.variabilityIndex ?? 'n/a'}, ${a.power.totalKj}kJ, coasting ${a.power.coastingPct}%
 - Load: IF ${ride.intensityFactor ?? 'n/a'}, TSS ${ride.tss ?? 'n/a'}

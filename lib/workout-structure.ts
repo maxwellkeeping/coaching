@@ -1,5 +1,6 @@
 import type { StreamData } from './decoupling'
 import type { WorkInterval } from './ride-analysis'
+import { segmentRide, describeSegments, type Segment, type SegmentedRide } from './segments'
 
 /** Power is smoothed over this window before structure is read, to kill noise and coasting spikes. */
 const SMOOTHING_SECS = 15
@@ -52,6 +53,8 @@ export interface RideStructure {
   avgWorkPctFtp: number | null
   /** A coach-readable line: "3 × 12min over-unders, alternating 2min @ 106% / 2min @ 88% FTP". */
   description: string
+  /** The segment-by-segment read of the ride, as a coach would call it off a graph. */
+  segmentSummary: string
   /** True when intervals were inferred from the power stream rather than the rider's laps. */
   inferredFromStream: boolean
   /**
@@ -92,48 +95,87 @@ function mean(values: number[]): number {
  */
 export function detectIntervalsFromStream(
   streams: StreamData,
-  ftp: number | null
+  _ftp?: number | null
 ): WorkInterval[] {
-  const n = streams.watts.length
-  if (n < MIN_EFFORT_SECS || !ftp || ftp <= 0) return []
+  return intervalsFromSegments(segmentRide(streams))
+}
 
-  const sm = smooth(streams.watts, SMOOTHING_SECS)
-  const floor = ftp * EFFORT_FLOOR_FRAC
-
-  const raw: Array<{ start: number; end: number }> = []
+/**
+ * Work intervals are maximal runs of working-level segments.
+ *
+ * Levels come from the ride's own power, not from FTP — so a stale FTP on the
+ * client record cannot hide a workout, which is exactly how a real over-under
+ * ended up reported as "no structured work".
+ */
+export function intervalsFromSegments(ride: SegmentedRide): WorkInterval[] {
+  const runs: WorkInterval[] = []
   let start: number | null = null
-  for (let i = 0; i < n; i++) {
-    if (sm[i] >= floor) {
-      if (start == null) start = i
+  let last = 0
+
+  for (const seg of ride.segments) {
+    if (seg.level === 'work') {
+      if (start == null) start = seg.startSecs
+      last = seg.endSecs
     } else if (start != null) {
-      raw.push({ start, end: i })
+      runs.push({ startIndex: start, endIndex: last, label: null })
       start = null
     }
   }
-  if (start != null) raw.push({ start, end: n })
+  if (start != null) runs.push({ startIndex: start, endIndex: last, label: null })
 
-  // Merge across a dip that is still being ridden hard. An over-under's "under"
-  // leg sits below the effort floor for two full minutes by design — long
-  // enough to look like the end of the interval, but ridden at ~90% FTP, which
-  // a real recovery valley never is. The power in the gap is what separates
-  // them, not its length.
-  const merged: Array<{ start: number; end: number }> = []
-  for (const effort of raw) {
-    const last = merged[merged.length - 1]
-    if (last) {
-      const gapSecs = effort.start - last.end
-      const gapPower = gapSecs > 0 ? mean(sm.slice(last.end, effort.start)) : Infinity
-      if (gapSecs <= MAX_INNER_DIP_SECS && gapPower >= ftp * INNER_DIP_FLOOR_FRAC) {
-        last.end = effort.end
-        continue
-      }
-    }
-    merged.push({ ...effort })
+  const rideSecs = ride.segments.length > 0 ? ride.segments[ride.segments.length - 1].endSecs : 0
+
+  return runs
+    .filter(r => r.endIndex - r.startIndex >= MIN_EFFORT_SECS)
+    // A single stretch covering the whole ride is not an interval — it is just
+    // the ride. Structure means contrast, and there is none here.
+    .filter(r => rideSecs === 0 || (r.endIndex - r.startIndex) / rideSecs < 0.9)
+    .map((r, i) => ({ ...r, label: `Effort ${i + 1}` }))
+}
+
+/** How far apart the two levels of an over-under must sit, relative to the block. */
+const OVER_UNDER_SPREAD = 0.08
+
+/**
+ * Read the alternation inside a block from its own segments.
+ *
+ * The two levels are judged against the block's midpoint rather than against
+ * FTP: an over-under is defined by alternating harder and easier legs, and that
+ * is true whether the rider's FTP is 250W, 400W, or wrong on file.
+ */
+function alternationOf(blockSegments: Segment[]): {
+  segments: StructureBlock['segments']
+  alternations: number
+  isOverUnder: boolean
+} {
+  const usable = blockSegments.filter(s => s.durationSecs >= MIN_SEGMENT_SECS)
+  if (usable.length < 4) return { segments: [], alternations: 0, isOverUnder: false }
+
+  const powers = usable.map(s => s.avgWatts)
+  const high = Math.max(...powers)
+  const low = Math.min(...powers)
+  if (high <= 0 || (high - low) / high < OVER_UNDER_SPREAD) {
+    return { segments: [], alternations: 0, isOverUnder: false }
   }
 
-  return merged
-    .filter(e => e.end - e.start >= MIN_EFFORT_SECS)
-    .map((e, i) => ({ startIndex: e.start, endIndex: e.end, label: `Effort ${i + 1}` }))
+  const mid = (high + low) / 2
+  const sides = usable.map(s => ({
+    side: (s.avgWatts >= mid ? 'over' : 'under') as 'over' | 'under',
+    secs: s.durationSecs,
+    avgWatts: s.avgWatts,
+  }))
+
+  let alternations = 0
+  for (let i = 1; i < sides.length; i++) {
+    if (sides[i].side !== sides[i - 1].side) alternations++
+  }
+
+  const overSecs = sides.filter(s => s.side === 'over').reduce((t, s) => t + s.secs, 0)
+  const underSecs = sides.filter(s => s.side === 'under').reduce((t, s) => t + s.secs, 0)
+  const total = overSecs + underSecs
+  const balanced = total > 0 && overSecs / total >= 0.2 && underSecs / total >= 0.2
+
+  return { segments: sides, alternations, isOverUnder: alternations >= MIN_ALTERNATIONS && balanced }
 }
 
 /** Sustained runs either side of threshold within one block. */
@@ -166,23 +208,19 @@ function segmentsOf(watts: number[], ftp: number): StructureBlock['segments'] {
     }))
 }
 
-function analyzeBlock(streams: StreamData, interval: WorkInterval, ftp: number | null): StructureBlock {
+function analyzeBlock(
+  streams: StreamData,
+  interval: WorkInterval,
+  ftp: number | null,
+  rideSegments: Segment[]
+): StructureBlock {
   const watts = streams.watts.slice(interval.startIndex, interval.endIndex)
   const avgWatts = Math.round(mean(watts))
-  const segments = ftp && ftp > 0 ? segmentsOf(watts, ftp) : []
 
-  let alternations = 0
-  for (let i = 1; i < segments.length; i++) {
-    if (segments[i].side !== segments[i - 1].side) alternations++
-  }
-
-  const overSecs = segments.filter(s => s.side === 'over').reduce((s, x) => s + x.secs, 0)
-  const underSecs = segments.filter(s => s.side === 'under').reduce((s, x) => s + x.secs, 0)
-  const total = overSecs + underSecs
-
-  // An over-under has to actually spend meaningful time on both sides —
-  // otherwise it is a threshold effort with a couple of surges.
-  const balanced = total > 0 && overSecs / total >= 0.2 && underSecs / total >= 0.2
+  const inBlock = rideSegments.filter(
+    s => s.startSecs >= interval.startIndex && s.endSecs <= interval.endIndex
+  )
+  const { segments, alternations, isOverUnder } = alternationOf(inBlock)
 
   return {
     startSecs: interval.startIndex,
@@ -192,7 +230,7 @@ function analyzeBlock(streams: StreamData, interval: WorkInterval, ftp: number |
     avgPctFtp: ftp && ftp > 0 ? Math.round((avgWatts / ftp) * 100) : null,
     segments,
     alternations,
-    isOverUnder: alternations >= MIN_ALTERNATIONS && balanced,
+    isOverUnder,
   }
 }
 
@@ -286,10 +324,11 @@ export function classifyRideStructure(
   lapIntervals: WorkInterval[],
   ftp: number | null
 ): RideStructure {
+  const segmented = segmentRide(streams)
   const inferred = lapIntervals.length === 0
-  const intervals = inferred ? detectIntervalsFromStream(streams, ftp) : lapIntervals
+  const intervals = inferred ? intervalsFromSegments(segmented) : lapIntervals
 
-  const blocks = intervals.map(i => analyzeBlock(streams, i, ftp))
+  const blocks = intervals.map(i => analyzeBlock(streams, i, ftp, segmented.segments))
   const pcts = blocks.map(b => b.avgPctFtp).filter((p): p is number => p != null)
   const avgWorkPctFtp = pcts.length > 0 ? Math.round(mean(pcts)) : null
   const archetype = archetypeOf(blocks, avgWorkPctFtp, ftp)
@@ -297,7 +336,10 @@ export function classifyRideStructure(
 
   return {
     archetype,
-    classifiable: (ftp != null && ftp > 0) || lapIntervals.length > 0,
+    segmentSummary: describeSegments(segmented, ftp),
+    // Shape is read from the ride's own power, so it is readable with no FTP at
+    // all. Only the intensity *band* needs one.
+    classifiable: segmented.segments.length > 0,
     blocks,
     repScheme: scheme,
     avgWorkPctFtp,
@@ -439,9 +481,22 @@ export function compareStructures(
   }
 
   if (ride.archetype === 'unstructured') {
+    // Only some prescriptions inherently mean intervals. "Tempo" or "sweet
+    // spot" can perfectly well be a continuous block, and calling a steady
+    // tempo ride the wrong session would be exactly the mistake this whole
+    // layer exists to stop. Reps in the text settle it either way.
+    const inherentlyIntervals = new Set(['over-under', 'vo2max', 'sprints'])
+    const expectsReps = prescribed.reps != null || inherentlyIntervals.has(prescribed.archetype)
+
+    if (expectsReps) {
+      return {
+        verdict: 'different-structure',
+        notes: [`${ARCHETYPE_LABELS[prescribed.archetype]} were prescribed, but the ride has no structured efforts in it.`],
+      }
+    }
     return {
-      verdict: 'different-structure',
-      notes: [`${ARCHETYPE_LABELS[prescribed.archetype]} were prescribed, but the ride has no structured efforts in it.`],
+      verdict: 'similar-structure',
+      notes: [`Ridden as one continuous block where ${ARCHETYPE_LABELS[prescribed.archetype]} was prescribed — the intensity it was held at is the thing to judge.`],
     }
   }
 
