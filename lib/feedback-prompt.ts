@@ -11,6 +11,8 @@ export interface FeedbackContext {
   /** What the coach said when uploading — context the file cannot carry. */
   coachNote: string | null
   comparison: PlanComparison
+  /** Set when the ride was matched to a session prescribed for another day. */
+  movedFrom?: string | null
   /** Where this ride sits in the plan, when the plan has dates. */
   planWeek: number | null
   planWeeks: number | null
@@ -41,7 +43,8 @@ function rideBlock(ride: FitRideSummary): string {
       ).join('\n')
     : 'No work intervals detected — this reads as a continuous ride.'
 
-  return `- Duration ${mins(a.durationSecs)}${ride.reported.totalDistanceKm != null ? `, ${ride.reported.totalDistanceKm}km` : ''}${ride.reported.totalAscentM != null ? `, ${ride.reported.totalAscentM}m climbing` : ''}
+  return `- What this ride actually was: ${ride.structure.description}${ride.structure.inferredFromStream ? ' (read from the power stream — the rider did not press lap)' : ''}
+- Duration ${mins(a.durationSecs)}${ride.reported.totalDistanceKm != null ? `, ${ride.reported.totalDistanceKm}km` : ''}${ride.reported.totalAscentM != null ? `, ${ride.reported.totalAscentM}m climbing` : ''}
 - Power: avg ${a.power.avgWatts ?? 'n/a'}W, NP ${a.power.normalizedPower ?? 'n/a'}W, VI ${a.power.variabilityIndex ?? 'n/a'}, ${a.power.totalKj}kJ, coasting ${a.power.coastingPct}%
 - Load: IF ${ride.intensityFactor ?? 'n/a'}, TSS ${ride.tss ?? 'n/a'}
 - HR: avg ${a.hr.avgHr ?? 'n/a'}bpm, max ${a.hr.maxHr ?? 'n/a'}bpm${a.hr.pctAboveThresholdHr != null ? `, ${a.hr.pctAboveThresholdHr}% of time above 85% HRmax` : ''}
@@ -61,6 +64,7 @@ ${a.insights.length > 0 ? a.insights.map(i => `- ${i}`).join('\n') : '- None tri
 function comparisonBlock(c: PlanComparison): string {
   if (!c.planned) return 'This ride does not correspond to any planned session.'
   return `- Prescribed: ${c.planned.title} (${c.planned.intensity})${c.planned.date ? ` on ${c.planned.date}` : ''}, ${mins(c.planned.durationSecs)}${c.planned.targetLoad != null ? `, target TSS ${c.planned.targetLoad}` : ''}
+- Structure check: ${c.structure ? c.structure.verdict : 'not assessed'}
 - Compliance verdict from the numbers: ${c.verdict}
 ${c.notes.map(n => `- ${n}`).join('\n')}`
 }
@@ -121,7 +125,7 @@ export function buildFeedbackPrompt(ctx: FeedbackContext): string {
 ## The uploaded ride — ${ctx.filename}${ctx.rideDate ? ` (${ctx.rideDate})` : ''}${ctx.planWeek != null ? `, week ${ctx.planWeek}${ctx.planWeeks ? ` of ${ctx.planWeeks}` : ''} of the plan` : ''}
 ${rideBlock(ride)}
 ${ctx.coachNote ? `\n### Your note on this upload\n${ctx.coachNote}\n` : ''}
-## Executed against prescribed
+## Executed against prescribed${ctx.movedFrom ? `\nThis ride was matched by its structure to the session prescribed for ${ctx.movedFrom}, not by date. Treat it as that session, moved.` : ''}
 ${comparisonBlock(comparison)}
 
 ## Their earlier rides (most recent first)
@@ -141,6 +145,8 @@ ${upcomingBlock}
 - On outdoor endurance rides judge compliance on average HR, not power. Terrain inflates NP without a matching metabolic cost.
 - Aerobic efficiency (W/bpm) trending up is fitness. A single ride's EF is noise; the block's direction is the signal.
 - With no power data, work from HR and duration and say plainly which conclusions that limits.
+- Judge the session on what was ridden, not on the calendar. An over-under done a day late is the prescribed session, moved — say that, rather than calling it the wrong workout. Only call a session wrong when its shape genuinely differs from what was written.
+- An over-under's "under" legs sit below threshold by design. Never read them as a rider failing to hold power.
 
 ## Your task
 Respond with raw JSON only — no markdown fences, no commentary outside the JSON — in exactly this shape:

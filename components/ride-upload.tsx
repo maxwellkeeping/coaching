@@ -24,6 +24,7 @@ export interface PendingChange {
 
 export interface RideResult {
   rideId: string
+  movedFrom?: string | null
   filename: string
   rideDate: string | null
   ride: FitRideSummary
@@ -235,12 +236,30 @@ export function RideUpload({ clientId, hasPlan, onUploaded }: {
               {verdict?.label}
             </div>
             <div className="text-base font-semibold">{result.feedback.headline}</div>
+            <div className="text-sm mt-1" style={{ color: COLORS.body }}>
+              Rode: {result.ride.structure.description}
+              {result.ride.structure.inferredFromStream && (
+                <span style={{ color: COLORS.muted }}> — read from the power stream, no lap markers in the file</span>
+              )}
+            </div>
             <div className="text-sm mt-2" style={{ color: COLORS.body }}>{result.feedback.executionSummary}</div>
+            {result.movedFrom && (
+              <div className="text-[11px] mt-2" style={{ color: COLORS.warn }}>
+                Matched by structure to the session prescribed for {result.movedFrom} — the session was moved, not missed.
+              </div>
+            )}
             {result.comparison.planned && (
               <div className="text-[11px] mt-3" style={{ color: COLORS.muted }}>
                 Prescribed: {result.comparison.planned.title} · {formatDuration(result.comparison.planned.durationSecs)}
                 {result.comparison.planned.targetLoad != null ? ` · target TSS ${result.comparison.planned.targetLoad}` : ''}
               </div>
+            )}
+            {result.comparison.notes.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {result.comparison.notes.map((n, i) => (
+                  <li key={i} className="text-[11px]" style={{ color: COLORS.muted }}>• {n}</li>
+                ))}
+              </ul>
             )}
           </Card>
 

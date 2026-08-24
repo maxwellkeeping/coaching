@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sessionDate, resolveDates, matchSession, weekOf, daysBetween, addDays } from './plan'
+import { sessionDate, resolveDates, matchSession, matchSessionByStructure, weekOf, daysBetween, addDays } from './plan'
 import type { PlanSession } from './types'
 
 function session(partial: Partial<PlanSession> & { week: number; dayOfWeek: number }): PlanSession {
@@ -112,5 +112,68 @@ describe('weekOf', () => {
   it('returns null outside the plan', () => {
     expect(weekOf('2026-08-24', '2026-08-20', 8)).toBeNull()
     expect(weekOf('2026-08-24', '2026-11-01', 8)).toBeNull()
+  })
+})
+
+describe('matchSessionByStructure', () => {
+  const overUnderSession = session({
+    week: 1, dayOfWeek: 2, date: '2026-08-25',
+    title: 'Over-unders 3x12', description: '3x12min over/under, 2min @ 105% / 2min @ 90%',
+    intensity: 'threshold',
+  })
+  const enduranceSession = session({
+    week: 1, dayOfWeek: 3, date: '2026-08-26',
+    title: 'Endurance', description: '2h steady Z2', intensity: 'endurance',
+  })
+  const sessions = [overUnderSession, enduranceSession]
+
+  const structure = (archetype: string, classifiable = true) => ({
+    archetype,
+    blocks: [],
+    repScheme: null,
+    avgWorkPctFtp: null,
+    description: `${archetype} session`,
+    inferredFromStream: false,
+    classifiable,
+  }) as unknown as Parameters<typeof matchSessionByStructure>[2]
+
+  it('takes the date match when the shape agrees with it', () => {
+    const { session: matched, movedFrom } = matchSessionByStructure(sessions, '2026-08-25', structure('over-under'))
+    expect(matched?.title).toBe('Over-unders 3x12')
+    expect(movedFrom).toBeNull()
+  })
+
+  it('finds the session by its shape when it was ridden on another day', () => {
+    // Over-unders ridden Wednesday, when Wednesday was the endurance day.
+    const { session: matched, movedFrom } = matchSessionByStructure(sessions, '2026-08-26', structure('over-under'))
+    expect(matched?.title).toBe('Over-unders 3x12')
+    expect(movedFrom).toBe('2026-08-25')
+  })
+
+  it('does not hunt for a better match when the date match already fits', () => {
+    const { session: matched, movedFrom } = matchSessionByStructure(sessions, '2026-08-26', structure('endurance'))
+    expect(matched?.title).toBe('Endurance')
+    expect(movedFrom).toBeNull()
+  })
+
+  it('keeps the date match when no session anywhere matches the shape', () => {
+    const { session: matched, movedFrom } = matchSessionByStructure(sessions, '2026-08-25', structure('sprints'))
+    expect(matched?.title).toBe('Over-unders 3x12')
+    expect(movedFrom).toBeNull()
+  })
+
+  it('does not reassign a ride it could not classify', () => {
+    const { session: matched, movedFrom } = matchSessionByStructure(sessions, '2026-08-26', structure('unstructured', false))
+    expect(matched?.title).toBe('Endurance')
+    expect(movedFrom).toBeNull()
+  })
+
+  it('will not reach beyond the structure match window', () => {
+    const distant = [session({
+      week: 1, dayOfWeek: 1, date: '2026-08-10',
+      title: 'Over-unders 3x12', description: 'over/under', intensity: 'threshold',
+    })]
+    const { session: matched } = matchSessionByStructure(distant, '2026-08-25', structure('over-under'))
+    expect(matched).toBeNull()
   })
 })

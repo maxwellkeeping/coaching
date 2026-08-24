@@ -50,6 +50,16 @@ npm run build          # Full Next.js build
   /api/clients/[id]/plan` and the chat's `set_plan_start_date` both recompute
   every `plan_sessions.session_date` from the new start. Rides already uploaded
   keep the comparison they were given — re-upload to re-match.
+- **Rides are matched and judged on their shape, not the calendar.**
+  `lib/workout-structure.ts` reads what the ride actually was — over-unders,
+  VO2max, threshold, sweet spot, steady — from the power stream, inferring the
+  intervals when the rider never pressed lap. A session recognised by structure
+  within a few days of its prescribed date counts as that session, moved. This
+  is what stops the app reporting an over-under done a day late as the wrong
+  workout.
+- **An over-under's under legs are by design, not a failure.** Its average sits
+  in the threshold band, so archetype detection tests for alternation before
+  testing averages, and the intensity-shortfall rule is suppressed for it.
 - **Analysis degrades rather than refusing.** No FTP means no zones, TSS or
   %FTP, but decoupling, fade and duration still compute. No plan means the ride
   is analyzed as unplanned.

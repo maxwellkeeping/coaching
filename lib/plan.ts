@@ -1,4 +1,5 @@
 import type { PlanSession, SessionIntensity } from './types'
+import { compareStructures, parsePrescribedStructure, type RideStructure } from './workout-structure'
 
 export const INTENSITIES: SessionIntensity[] = [
   'rest', 'recovery', 'endurance', 'tempo', 'threshold', 'vo2max', 'anaerobic', 'race', 'test', 'unknown',
@@ -6,6 +7,8 @@ export const INTENSITIES: SessionIntensity[] = [
 
 /** Days a session may sit either side of a ride and still be considered its match. */
 export const MATCH_TOLERANCE_DAYS = 1
+/** How far to look for a session whose *shape* matches the ride, when dates alone do not. */
+export const STRUCTURE_MATCH_WINDOW_DAYS = 4
 
 export function addDays(date: string, days: number): string {
   const d = new Date(`${date}T12:00:00Z`)
@@ -73,4 +76,44 @@ export function weekOf(startDate: string, date: string, weeks: number | null): n
   const week = Math.floor(offset / 7) + 1
   if (weeks != null && week > weeks) return null
   return week
+}
+
+/**
+ * Match a ride to its session using what was actually ridden, not just the date.
+ *
+ * Riders move sessions. Matching on the calendar alone means an over-under done
+ * on Wednesday instead of Tuesday is scored against Wednesday's endurance ride
+ * and reported as the wrong workout — the single most misleading thing this app
+ * can tell a coach. So: take the date match when the shapes agree, and
+ * otherwise look through the week for the session whose prescription this ride
+ * actually is.
+ */
+export function matchSessionByStructure<T extends PlanSession>(
+  sessions: T[],
+  rideDate: string,
+  structure: RideStructure
+): { session: T | null; movedFrom: string | null } {
+  const byDate = matchSession(sessions, rideDate)
+
+  if (byDate) {
+    const agreement = compareStructures(structure, parsePrescribedStructure(byDate.title, byDate.description))
+    if (agreement.verdict !== 'different-structure') return { session: byDate, movedFrom: null }
+  }
+
+  if (!structure.classifiable) return { session: byDate, movedFrom: null }
+
+  const candidates = sessions
+    .filter(s => s.date != null && s.intensity !== 'rest' && s.id !== byDate?.id)
+    .map(s => ({ s, gap: daysBetween(s.date!, rideDate) }))
+    .filter(x => Math.abs(x.gap) <= STRUCTURE_MATCH_WINDOW_DAYS)
+    .sort((a, b) => Math.abs(a.gap) - Math.abs(b.gap) || b.gap - a.gap)
+
+  for (const { s } of candidates) {
+    const agreement = compareStructures(structure, parsePrescribedStructure(s.title, s.description))
+    if (agreement.verdict === 'same-structure') {
+      return { session: s, movedFrom: s.date }
+    }
+  }
+
+  return { session: byDate, movedFrom: null }
 }

@@ -5,7 +5,7 @@ import { requireCoach } from '@/lib/auth'
 import { loadClient, loadActivePlan, toRideRecord } from '@/lib/db'
 import { parseFitFile, FitParseError } from '@/lib/fit-parser'
 import { summarizeFitRide, type FitRideSummary } from '@/lib/fit-analysis'
-import { matchSession, weekOf } from '@/lib/plan'
+import { matchSessionByStructure, weekOf } from '@/lib/plan'
 import { compareToPlan } from '@/lib/plan-match'
 import { computeProgression } from '@/lib/progression'
 import { buildFeedbackPrompt } from '@/lib/feedback-prompt'
@@ -110,8 +110,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   // 2. What it was meant to be, and how the block is going.
   const { plan, sessions } = await loadActivePlan(supabase, id)
-  const matched = rideDate ? matchSession(sessions, rideDate) : null
+  const { session: matched, movedFrom } = rideDate
+    ? matchSessionByStructure(sessions, rideDate, ride.structure)
+    : { session: null, movedFrom: null }
   const comparison = compareToPlan(ride, matched, client.ftp)
+
+  // A session recognised by its shape on another day was moved, not missed.
+  if (movedFrom && rideDate) {
+    comparison.notes.unshift(
+      `This is the session prescribed for ${movedFrom}, ridden on ${rideDate} — matched on what was actually ridden, not the date.`
+    )
+  }
 
   const { data: priorRows } = await supabase
     .from('rides')
@@ -153,6 +162,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         rideDate,
         coachNote,
         comparison,
+        movedFrom,
         planWeek: plan?.startDate && rideDate ? weekOf(plan.startDate, rideDate, plan.weeks) : null,
         planWeeks: plan?.weeks ?? null,
         progression,

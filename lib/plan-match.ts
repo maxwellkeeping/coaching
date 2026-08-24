@@ -1,5 +1,6 @@
 import type { PlanSession } from './types'
 import type { FitRideSummary as RideSummary } from './fit-analysis'
+import { archetypeBand, compareStructures, parsePrescribedStructure, type StructureComparison } from './workout-structure'
 
 /** Duration inside this band of the prescription counts as hitting it. */
 export const DURATION_TOLERANCE_PCT = 10
@@ -18,6 +19,8 @@ export type ComplianceVerdict =
 
 export interface PlanComparison {
   verdict: ComplianceVerdict
+  /** Whether the ride was the *kind* of session prescribed, judged on its shape. */
+  structure: StructureComparison | null
   /** Positive = rode longer than prescribed. Null when the plan gave no duration. */
   durationDeltaPct: number | null
   /** Positive = more load than prescribed. Null when the plan gave no target. */
@@ -61,14 +64,25 @@ export function compareToPlan(
   if (!session) {
     return {
       verdict: 'unplanned',
+      structure: null,
       durationDeltaPct: null,
       loadDeltaPct: null,
       planned: null,
-      notes: ['No planned session lines up with this ride — it sits outside the plan.'],
+      notes: [
+        `No planned session lines up with this ride — it sits outside the plan. The ride itself was ${ride.structure.description.toLowerCase()}.`,
+      ],
     }
   }
 
-  const notes: string[] = []
+  // What kind of session was this, against what kind was asked for? This is
+  // judged before duration and load, because a rider who did the prescribed
+  // over-unders a day late has done the session — and calling that "the wrong
+  // workout" on the strength of the calendar is how a coach stops trusting the
+  // tool.
+  const prescribedStructure = parsePrescribedStructure(session.title, session.description)
+  const structure = compareStructures(ride.structure, prescribedStructure)
+
+  const notes: string[] = [...structure.notes]
   const actualSecs = ride.analysis.durationSecs
   const durationDeltaPct = session.durationSecs && session.durationSecs > 0
     ? pctDelta(actualSecs, session.durationSecs)
@@ -93,7 +107,8 @@ export function compareToPlan(
   // target — a rider can complete every minute prescribed and still miss the
   // session entirely by riding the efforts 15% under.
   let intensityShortfall: number | null = null
-  if (isQuality && ftp && intervals.length > 0) {
+  const structuredAsOverUnder = ride.structure.archetype === 'over-under'
+  if (isQuality && !structuredAsOverUnder && ftp && intervals.length > 0) {
     const pcts = intervals.map(i => i.pctFtp).filter((p): p is number => p != null)
     if (pcts.length > 0) {
       const avgPctFtp = pcts.reduce((s, p) => s + p, 0) / pcts.length
@@ -109,8 +124,24 @@ export function compareToPlan(
 
   let verdict: ComplianceVerdict = 'as-prescribed'
 
+  // Structure only forces "different session" when the ride was a harder kind
+  // of session than asked for, or had no structure at all where intervals were
+  // written. Doing the prescribed shape at lower power is not a different
+  // session — it is the same session ridden easier, and the rules below say so
+  // more usefully. Cutting it short outranks structure either way: once a rider
+  // stops early the shape is bound to look wrong, and stopping early is the
+  // more informative fact.
+  const rideBand = archetypeBand(ride.structure.archetype)
+  const prescribedBand = prescribedStructure.archetype ? archetypeBand(prescribedStructure.archetype) : null
+  const wrongKind =
+    structure.verdict === 'different-structure' &&
+    (ride.structure.archetype === 'unstructured' ||
+      (rideBand != null && prescribedBand != null && rideBand > prescribedBand))
+
   if (durationDeltaPct != null && durationDeltaPct <= -25) {
     verdict = 'cut-short'
+  } else if (wrongKind) {
+    verdict = 'different-session'
   } else if (isQuality && intensityShortfall != null && intensityShortfall >= INTENSITY_SHORTFALL_PCT) {
     verdict = 'easier-than-prescribed'
   } else if (loadDeltaPct != null && loadDeltaPct > LOAD_TOLERANCE_PCT) {
@@ -140,8 +171,13 @@ export function compareToPlan(
     notes.push(`This was a prescribed rest day; ${mins(actualSecs)} was ridden instead.`)
   }
 
+  if (structure.verdict === 'same-structure' && verdict === 'as-prescribed') {
+    notes.unshift('This was the session as written.')
+  }
+
   return {
     verdict,
+    structure,
     durationDeltaPct,
     loadDeltaPct,
     planned: {

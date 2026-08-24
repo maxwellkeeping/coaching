@@ -1,6 +1,7 @@
 import { analyzeRide, type RideAnalysis, type WorkInterval } from './ride-analysis'
 import type { StreamData } from './decoupling'
 import type { FitLap, FitRecord, ParsedFit } from './fit-parser'
+import { classifyRideStructure, type RideStructure } from './workout-structure'
 
 /** Gap (seconds) beyond which a hole in the recording is treated as a stop, not a dropout. */
 const DROPOUT_TOLERANCE_SECS = 5
@@ -128,6 +129,8 @@ export interface FitRideSummary {
   intensityFactor: number | null
   tss: number | null
   analysis: RideAnalysis
+  /** What kind of session this actually was, read from the power itself. */
+  structure: RideStructure
   laps: FitLapSummary[]
 }
 
@@ -144,10 +147,19 @@ export function summarizeFitRide(parsed: ParsedFit, opts: SummarizeOptions = {})
   const workIntervals = detectWorkIntervals(parsed.laps)
     .map(w => ({ ...w, endIndex: Math.min(w.endIndex, streams.watts.length) }))
     .filter(w => w.endIndex - w.startIndex >= MIN_WORK_LAP_SECS)
+  const structure = classifyRideStructure(streams, workIntervals, opts.ftp ?? null)
+
+  // When the rider never pressed lap, the efforts found in the power stream are
+  // the only interval data there is — analyze against those rather than
+  // reporting a structured workout as one undifferentiated blob.
+  const effectiveIntervals = workIntervals.length > 0
+    ? workIntervals
+    : structure.blocks.map(b => ({ startIndex: b.startSecs, endIndex: b.endSecs, label: null }))
+
   const analysis = analyzeRide(streams, {
     ftp: opts.ftp,
     hrMax: opts.hrMax,
-    workIntervals,
+    workIntervals: effectiveIntervals,
   })
 
   const np = analysis.power.normalizedPower
@@ -185,6 +197,7 @@ export function summarizeFitRide(parsed: ParsedFit, opts: SummarizeOptions = {})
     intensityFactor,
     tss,
     analysis,
+    structure,
     laps: parsed.laps.map((l, i) => ({
       lap: i + 1,
       label: l.label,
