@@ -59,6 +59,18 @@ npm run build          # Full Next.js build
   fraction: a warmup at ~62% of working power sits either side of any fixed
   line, and merging it into the first interval drags the whole reading down a
   band.
+- **Matching a ride to a session is a matching problem, not a classification
+  one.** `lib/session-identify.ts` puts the measured segment table next to the
+  plan's own sessions, verbatim, and asks which one the ride is — the way a
+  coach reads a graph against a plan. Naming the ride and then string-matching
+  that name against the plan's wording was two lossy steps where a coach does
+  one, and it failed on any prescription whose wording the namer did not
+  anticipate. The deterministic matcher below is the fallback when that call
+  fails, and a returned session ID that was never offered is discarded.
+- **A confident identification is not second-guessed.** `compareToPlan` takes
+  `identified`, which suppresses the archetype-name check — having established
+  the ride *is* Tuesday's over-under, re-deriving a name for it and finding it
+  does not match the plan's wording is exactly the lossy step being replaced.
 - **Rides are matched and judged on their shape, not the calendar.**
   `lib/workout-structure.ts` names what the ride was — over-unders, VO2max,
   threshold, sweet spot, steady — from those segments, inferring the intervals

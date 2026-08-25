@@ -25,6 +25,7 @@ export interface PendingChange {
 export interface RideResult {
   rideId: string
   movedFrom?: string | null
+  identification?: { sessionId: string | null; confidence: string; reasoning: string } | null
   filename: string
   rideDate: string | null
   ride: FitRideSummary
@@ -243,9 +244,18 @@ export function RideUpload({ clientId, hasPlan, onUploaded }: {
               )}
             </div>
             <div className="text-sm mt-2" style={{ color: COLORS.body }}>{result.feedback.executionSummary}</div>
+            {result.identification?.reasoning && (
+              <div className="text-[11px] mt-2 rounded-lg p-2" style={{ backgroundColor: COLORS.bg, color: COLORS.body }}>
+                <span style={{ color: COLORS.muted }}>Matched to plan: </span>
+                {result.identification.reasoning}
+                {result.identification.confidence === 'low' && (
+                  <span style={{ color: COLORS.warn }}> (low confidence — worth checking)</span>
+                )}
+              </div>
+            )}
             {result.movedFrom && (
               <div className="text-[11px] mt-2" style={{ color: COLORS.warn }}>
-                Matched by structure to the session prescribed for {result.movedFrom} — the session was moved, not missed.
+                Prescribed for {result.movedFrom}, ridden later — the session was moved, not missed.
               </div>
             )}
             {result.comparison.planned && (

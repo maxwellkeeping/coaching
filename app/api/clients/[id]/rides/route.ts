@@ -6,6 +6,7 @@ import { loadClient, loadActivePlan, toRideRecord } from '@/lib/db'
 import { parseFitFile, FitParseError } from '@/lib/fit-parser'
 import { summarizeFitRide, type FitRideSummary } from '@/lib/fit-analysis'
 import { matchSessionByStructure, weekOf } from '@/lib/plan'
+import { buildIdentifyPrompt, parseIdentification, candidatesFor, type Identification } from '@/lib/session-identify'
 import { compareToPlan } from '@/lib/plan-match'
 import { computeProgression } from '@/lib/progression'
 import { buildFeedbackPrompt } from '@/lib/feedback-prompt'
@@ -108,17 +109,53 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: 'Could not read that FIT file.' }, { status: 500 })
   }
 
-  // 2. What it was meant to be, and how the block is going.
+  // 2. Which session is this? Put the ride's measured shape next to the plan's
+  //    own words and match them — the way a coach reads a graph against a plan.
+  //    Deterministic date/shape matching is the fallback when that call fails.
   const { plan, sessions } = await loadActivePlan(supabase, id)
-  const { session: matched, movedFrom } = rideDate
-    ? matchSessionByStructure(sessions, rideDate, ride.structure)
-    : { session: null, movedFrom: null }
-  const comparison = compareToPlan(ride, matched, client.ftp)
+  const candidates = candidatesFor(sessions, rideDate)
+
+  let matched = null as (typeof sessions)[number] | null
+  let identification: Identification | null = null
+
+  if (candidates.length > 0) {
+    try {
+      const { text } = await generateText({
+        model: anthropic('claude-opus-5'),
+        prompt: buildIdentifyPrompt(ride, rideDate, candidates),
+      })
+      identification = parseIdentification(text, candidates)
+      matched = identification.sessionId
+        ? sessions.find(s => s.id === identification!.sessionId) ?? null
+        : null
+    } catch (e) {
+      console.error('[rides] session identification failed:', e)
+    }
+  }
+
+  let movedFrom: string | null = null
+  if (identification == null) {
+    const fallback = rideDate
+      ? matchSessionByStructure(sessions, rideDate, ride.structure)
+      : { session: null, movedFrom: null }
+    matched = fallback.session
+    movedFrom = fallback.movedFrom
+  } else if (matched?.date && rideDate && matched.date !== rideDate) {
+    movedFrom = matched.date
+  }
+
+  const comparison = compareToPlan(ride, matched, client.ftp, {
+    identified: matched != null && identification?.confidence !== 'low',
+  })
+
+  if (identification?.reasoning) {
+    comparison.notes.unshift(identification.reasoning)
+  }
 
   // A session recognised by its shape on another day was moved, not missed.
   if (movedFrom && rideDate) {
-    comparison.notes.unshift(
-      `This is the session prescribed for ${movedFrom}, ridden on ${rideDate} — matched on what was actually ridden, not the date.`
+    comparison.notes.splice(1, 0,
+      `Prescribed for ${movedFrom}, ridden on ${rideDate} — matched on what was actually ridden, not the date.`
     )
   }
 
@@ -242,6 +279,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     comparison,
     feedback,
     progression,
+    identification,
     matchedSession: matched,
     pendingChanges,
     hasPlan: plan != null,

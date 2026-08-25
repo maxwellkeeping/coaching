@@ -56,10 +56,22 @@ const QUALITY_INTENSITIES = new Set(['threshold', 'vo2max', 'anaerobic', 'tempo'
  * where riding the right time at the wrong power is the failure that matters —
  * on an endurance ride the reverse is true, and going too hard is the fault.
  */
+export interface CompareOptions {
+  /**
+   * Set when the session was identified by matching the ride's shape against
+   * the plan directly. The archetype-name check must not then overrule it:
+   * having established this *is* Tuesday's over-under, re-deriving a name for
+   * the ride and finding it does not string-match the plan's wording is the
+   * lossy step this exists to replace.
+   */
+  identified?: boolean
+}
+
 export function compareToPlan(
   ride: RideSummary,
   session: PlanSession | null,
-  ftp: number | null
+  ftp: number | null,
+  options: CompareOptions = {}
 ): PlanComparison {
   if (!session) {
     return {
@@ -134,6 +146,7 @@ export function compareToPlan(
   const rideBand = archetypeBand(ride.structure.archetype)
   const prescribedBand = prescribedStructure.archetype ? archetypeBand(prescribedStructure.archetype) : null
   const wrongKind =
+    !options.identified &&
     structure.verdict === 'different-structure' &&
     (ride.structure.archetype === 'unstructured' ||
       (rideBand != null && prescribedBand != null && rideBand > prescribedBand))
