@@ -24,6 +24,25 @@ interface StoredRide {
   createdAt: string
 }
 
+interface PositionView {
+  position: {
+    week: number | null
+    weeks: number | null
+    nextSession: PlanSession | null
+    daysToGoal: number | null
+    missedSessions: PlanSession[]
+  }
+  inference: {
+    suggestedStart: string | null
+    confidence: 'high' | 'medium' | 'low'
+    summary: string
+    ridesConsidered: number
+    equallyGood: string[]
+  }
+  disagreesWithSaved: boolean
+  rideCount: number
+}
+
 interface ClientView {
   client: Client
   plan: { id: string; planName: string | null; startDate: string | null; weeks: number | null; filename: string } | null
@@ -54,6 +73,7 @@ export default function ClientPage({ params }: { params: Promise<{ id: string }>
   const [newStart, setNewStart] = useState('')
   const [savingStart, setSavingStart] = useState(false)
   const [startNote, setStartNote] = useState('')
+  const [position, setPosition] = useState<PositionView | null>(null)
 
   const saveStartDate = async () => {
     if (!newStart) return
@@ -91,6 +111,17 @@ export default function ClientPage({ params }: { params: Promise<{ id: string }>
   }, [id])
 
   useEffect(() => { load() }, [load])
+
+  // Where the client actually is, worked out from their uploads. Loaded
+  // alongside the main view rather than blocking it.
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/clients/${id}/position`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(json => { if (!cancelled && json) setPosition(json) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [id, view?.rides.length])
 
   if (loading) {
     return (
@@ -160,6 +191,51 @@ export default function ClientPage({ params }: { params: Promise<{ id: string }>
 
         <div style={{ display: tab === 'overview' ? 'block' : 'none' }}>
           <div className="space-y-5">
+            {position && plan && (
+              <div>
+                <SectionTitle>Where {client.name} is</SectionTitle>
+                <Card>
+                  <div className="flex flex-wrap gap-x-8 gap-y-2">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-widest" style={{ color: COLORS.muted }}>Plan week</div>
+                      <div className="text-lg font-semibold">
+                        {position.position.week != null
+                          ? `${position.position.week}${position.position.weeks ? ` of ${position.position.weeks}` : ''}`
+                          : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-widest" style={{ color: COLORS.muted }}>Next session</div>
+                      <div className="text-sm mt-1">
+                        {position.position.nextSession
+                          ? `${position.position.nextSession.date} · ${position.position.nextSession.title}`
+                          : 'Nothing left in the plan'}
+                      </div>
+                    </div>
+                    {position.position.daysToGoal != null && (
+                      <div>
+                        <div className="text-[10px] uppercase tracking-widest" style={{ color: COLORS.muted }}>To goal</div>
+                        <div className="text-lg font-semibold">{position.position.daysToGoal} days</div>
+                      </div>
+                    )}
+                  </div>
+                  {position.rideCount > 0 && (
+                    <div className="text-[11px] mt-3" style={{ color: COLORS.muted }}>
+                      {position.inference.summary}
+                    </div>
+                  )}
+                  {position.position.missedSessions.length > 0 && (
+                    <div className="text-[11px] mt-2" style={{ color: COLORS.warn }}>
+                      {position.position.missedSessions.length} prescribed session
+                      {position.position.missedSessions.length === 1 ? '' : 's'} with no upload
+                      {' '}({position.position.missedSessions.slice(0, 3).map(s => s.date).join(', ')}
+                      {position.position.missedSessions.length > 3 ? '…' : ''}) — they may have ridden without sending the file.
+                    </div>
+                  )}
+                </Card>
+              </div>
+            )}
+
             <ProgressionView progression={progression} />
 
             {thisWeek.length > 0 && (

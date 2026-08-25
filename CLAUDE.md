@@ -45,6 +45,16 @@ npm run build          # Full Next.js build
 - **Proposed changes are filtered to real upcoming sessions** before they are
   saved, and their fields are coerced to the plan's columns — a hallucinated
   session ID or field never reaches the database.
+- **The rides are the evidence for where a client is in the plan.**
+  `lib/plan-position.ts` scores every plausible start date by how well the
+  uploaded rides — their dates and what each ride was — line up with the plan's
+  prescribed shapes, and reports the alignment that explains them. Consecutive
+  start dates often produce identical session dates, and a plan whose weeks are
+  alike cannot distinguish a whole-week shift at all; both are reported rather
+  than papered over, and confidence is capped when another alignment fits
+  equally well. A session counts as missed only when no ride was uploaded within
+  a day of it — a session ridden without sending the file is not evidence of a
+  skipped session.
 - **The plan start date is editable, and re-dates the plan.** The date printed
   on a plan PDF is rarely the date the client began. `PATCH
   /api/clients/[id]/plan` and the chat's `set_plan_start_date` both recompute

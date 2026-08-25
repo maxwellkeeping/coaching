@@ -93,6 +93,7 @@ Rules:
 - Before changing anything, say what you are about to change and what it will affect. Then do it in the same turn — do not wait for a second confirmation on a correction the coach has clearly asked for.
 - Re-dating a plan changes which session every past ride was matched against. Say so when you do it, and tell the coach that rides already uploaded keep the comparison they were given — re-upload one if they want it re-matched.
 - Never invent a session ID. Use only the IDs listed above.
+- The rides are the evidence for where the client is in the plan, not the start date on file. When the two disagree, trust the rides and say what they show.
 - Cite numbers from the data above rather than speaking in generalities. If the data does not answer the question, say what is missing.
 - Be concise. The coach is between clients.`
 }

@@ -6,11 +6,15 @@ import { loadClient, loadActivePlan, toRideRecord } from '@/lib/db'
 import { computeProgression } from '@/lib/progression'
 import { buildChatSystemPrompt } from '@/lib/chat-prompt'
 import { sessionDate, weekOf, INTENSITIES } from '@/lib/plan'
+import { inferPlanStart, planPosition, type RideEvidence } from '@/lib/plan-position'
+import type { FitRideSummary } from '@/lib/fit-analysis'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
 const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+
+const noParamSchema = zodSchema(z.object({ _: z.string().optional() }))
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -136,6 +140,56 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
           if (error) return { error: error.message }
           return { ok: true, session: data }
+        },
+      }),
+
+      locate_in_plan: tool({
+        description:
+          "Work out where the client is in their plan from their uploaded rides, and whether the plan's start date on file is right. Use when the coach asks where someone is in the block, which week they are in, whether the start date is correct, or what they have missed. Reads the ride dates and what each ride was, and finds the plan alignment that explains them.",
+        inputSchema: noParamSchema,
+        execute: async () => {
+          try {
+            const { data: rideRows } = await supabase
+              .from('rides')
+              .select('ride_date, summary')
+              .eq('client_id', id)
+              .order('ride_date', { ascending: true })
+
+            const evidence: RideEvidence[] = (rideRows ?? [])
+              .filter(r => r.ride_date)
+              .map(r => {
+                const summary = r.summary as FitRideSummary | null
+                return {
+                  date: r.ride_date as string,
+                  archetype: summary?.structure?.archetype ?? 'unstructured',
+                  durationSecs: summary?.analysis.durationSecs ?? 0,
+                }
+              })
+
+            const inference = inferPlanStart(evidence, sessions, today, plan?.weeks ?? null, plan?.startDate ?? null)
+            const position = planPosition(
+              sessions,
+              plan?.startDate ?? null,
+              plan?.weeks ?? null,
+              evidence.map(e => e.date),
+              today,
+              client.goal_date
+            )
+
+            return {
+              savedStartDate: plan?.startDate ?? null,
+              inference,
+              currentWeek: position.week,
+              nextSession: position.nextSession
+                ? { id: position.nextSession.id, date: position.nextSession.date, title: position.nextSession.title }
+                : null,
+              missedSessions: position.missedSessions.slice(0, 10).map(s => ({ date: s.date, title: s.title })),
+              daysToGoal: position.daysToGoal,
+              note: 'A session counts as missed only when no ride was uploaded within a day of it — the client may have ridden it without sending the file.',
+            }
+          } catch (e) {
+            return { error: String(e) }
+          }
         },
       }),
 
